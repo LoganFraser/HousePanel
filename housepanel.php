@@ -19,6 +19,10 @@
  * 
  *
  * Revision History
+ * 1.51       Integrate skin-material from @vervallsweg to v1.0.0 to work with sliders
+ * 1.50       Enable Hubitat devices when on same local network as HP
+ * 1.49       sliderhue branch to implement slider and draft color picker
+ * 1.48       Integrate @nitwitgit (Nick) TileEdit V3.2
  * 1.47       Integrate Nick's color picker and custom dialog
  * 1.46       Free form drag and drop of tiles
  * 1.45       Merge in custom tile editing from Nick ngredient-master branch
@@ -113,40 +117,57 @@ function htmlHeader($skindir="skin-housepanel") {
     $tc.= '<link rel="shortcut icon" href="media/favicon.ico">';
     
     // load jQuery and themes
-	
     $tc.= '<link rel="stylesheet" href="https://code.jquery.com/ui/1.12.1/themes/base/jquery-ui.css">';
     $tc.= '<script src="https://code.jquery.com/jquery-1.12.4.js"></script>';
     $tc.= '<script src="https://code.jquery.com/ui/1.12.1/jquery-ui.js"></script>';
+    $tc.= '<script src="http://malsup.github.com/jquery.form.js"></script>';
 
+    // TODO - switch to the jquery mobile framework
+    /*
+    $tc.= '<link rel="stylesheet" href="http://code.jquery.com/mobile/1.4.5/jquery.mobile-1.4.5.min.css" />';
+    $tc.= '<script src="http://code.jquery.com/jquery-1.12.4.min.js"></script>';
+    $tc.= '<script src="http://code.jquery.com/mobile/1.4.5/jquery.mobile-1.4.5.min.js"></script>';
+     * 
+     */
+    
     // load quicktime script for video
     $tc.= '<script src="ac_quicktime.js"></script>';
 
     // include hack from touchpunch.furf.com to enable touch punch through for tablets
-    // $tc.= '<script src="jquery.ui.touch-punch.min.js"></script>';
+    $tc.= '<script src="jquery.ui.touch-punch.min.js"></script>';
+    
+    // minicolors library
+    $tc.= "<script src=\"jquery.minicolors.min.js\"></script>";
+    $tc.= "<link rel=\"stylesheet\" href=\"jquery.minicolors.css\">";
     
     // load custom .css and the main script file
     if (!$skindir) {
         $skindir = "skin-housepanel";
     }
     $tc.= "<link rel=\"stylesheet\" type=\"text/css\" href=\"$skindir/housepanel.css\">";
+    
+    if ( file_exists( $skindir . "/housepanel-theme.js") ) {
+        $tc.= "<script type=\"text/javascript\" src=\"$skindir/housepanel-theme.js\"></script>";
+    }
 	
 	//load cutomization helpers
     $tc.= "<script type=\"text/javascript\" src=\"farbtastic.js\"></script>";
     $tc.= "<link rel=\"stylesheet\" type=\"text/css\" href=\"farbtastic.css\"/>";
     $tc.= "<script type=\"text/javascript\" src=\"tileeditor.js\"></script>";
     $tc.= "<link id=\"tileeditor\" rel=\"stylesheet\" type=\"text/css\" href=\"tileeditor.css\"/>";	
-    
+
     // load the custom tile sheet if it exists
     // note - if it doesn't exist, we will create it and for future page reloads
     if (file_exists("$skindir/customtiles.css")) {
-        $tc.= "<link id=\"customtiles\" rel=\"stylesheet\" type=\"text/css\" href=\"$skindir/customtiles.css\">";
+        $tc.= "<link id=\"customtiles\" rel=\"stylesheet\" type=\"text/css\" href=\"$skindir/customtiles.css?v=". time() ."\">";
     }
     $tc.= '<script type="text/javascript" src="housepanel.js"></script>';  
         // dynamically create the jquery startup routine to handle all types
         // note - we dont need bulb, light, or switchlevel because they all have a switch subtype
         $tc.= '<script type="text/javascript">';
         $clicktypes = array("switch.on","switch.off",
-                            "lock","door","momentary",
+                            "lock.locked","lock.unlocked","door.open","door.closed",
+                            "momentary",
                             "heat-dn","heat-up",
                             "cool-dn","cool-up","thermomode","thermofan",
                             "musicmute","musicstatus", 
@@ -161,10 +182,6 @@ function htmlHeader($skindir="skin-housepanel") {
             $tc.= '  setupPage("' . $thing . '");';
         }
         $tc.= "});";
-
-		
-		
-		
     $tc.= '</script>';
 
     // begin creating the main page
@@ -200,6 +217,31 @@ function getResponse($host, $access_token) {
             // make a unique index for this thing based on id and type
             $idx = $thetype . "|" . $id;
             $edited[$idx] = array("id" => $id, "name" => $content["name"], "value" => $content["value"], "type" => $thetype);
+        }
+    }
+    return $edited;
+}
+
+function getHubitatDevices($path) {
+
+    $edited = array();
+    if ( HUBITAT_HOST && HUBITAT_ID && HUBITAT_ACCESS_TOKEN ) {
+        $host = HUBITAT_HOST . "/apps/api/" . HUBITAT_ID . "/" . $path;
+        $headertype = array("Authorization: Bearer " . HUBITAT_ACCESS_TOKEN);
+        $nvpreq = "access_token=" . HUBITAT_ACCESS_TOKEN;
+        $response = curl_call($host, $headertype, $nvpreq, "POST");
+
+        // configure returned array with the "id" as the key and check for proper return
+        // add prefix of h_ to all hubitat device id's
+        if ($response && is_array($response) && count($response)) {
+            foreach ($response as $k => $content) {
+                $id = "h_" . $content["id"];
+                $thetype = $content["type"];
+
+                // make a unique index for this thing based on id and type
+                $idx = $thetype . "|" . $id;
+                $edited[$idx] = array("id" => $id, "name" => $content["name"], "value" => $content["value"], "type" => $thetype);
+            }
         }
     }
     return $edited;
@@ -295,6 +337,20 @@ function getAllThings($endpt, $access_token) {
                 $allthings = array_merge($allthings, $newitem);
             }
         }
+ 
+        // only do this if user specific the hubitat info
+        if ( HUBITAT_HOST && HUBITAT_ID && HUBITAT_ACCESS_TOKEN) {
+            // get Hubitat devices
+            $hubitattypes = array("switches", "lights", "dimmers","bulbs","momentaries","contacts",
+                                "sensors", "locks", "thermostats", "temperatures", "valves",
+                                "doors", "illuminances", "smokes", "waters", "presences");
+            foreach ($hubitattypes as $key) {
+                $newitem = getHubitatDevices($key);
+                if ($newitem && count($newitem)>0) {
+                    $allthings = array_merge($allthings, $newitem);
+                }
+            }
+        }
 
         // add a clock tile
         $weekday = date("l");
@@ -306,6 +362,13 @@ function getAllThings($endpt, $access_token) {
         // TODO - implement an analog clock
         // $allthings["clock|clockanalog"] = array("id" => "clockanalog", "name" => "Analog Clock", "value" => $todaydate, "type" => "clock");
 
+        // add 4 generic iFrame tiles
+        $forecast = "<iframe width=\"490\" height=\"220\" src=\"forecast.html\" frameborder=\"0\"></iframe>";
+        $allthings["frame|frame1"] = array("id" => "frame1", "name" => "Weather Forecast", "value" => array("name"=>"Weather Forecast", "frame"=>"$forecast","status"=>"stop"), "type" => "frame");
+        $allthings["frame|frame2"] = array("id" => "frame2", "name" => "Frame 2", "value" => array("name"=>"Frame 2", "frame"=>"","status"=>"stop"), "type" => "frame");
+        $allthings["frame|frame3"] = array("id" => "frame3", "name" => "Frame 3", "value" => array("name"=>"Frame 3", "frame"=>"","status"=>"stop"), "type" => "frame");
+        $allthings["frame|frame4"] = array("id" => "frame4", "name" => "Frame 4", "value" => array("name"=>"Frame 4", "frame"=>"","status"=>"stop"), "type" => "frame");
+        
         // add a video tile
         $allthings["video|vid1"] = array("id" => "vid1", "name" => "Video", "value" => array("name"=>"Sample Video", "url"=>"vid1"), "type" => "video");
         
@@ -353,7 +416,7 @@ function processName($thingname, $thingtype) {
         $subtype = "";
         $k = 0;
         foreach ($subopts as $key) {
-            if (strtolower($key) != $thingtype) {
+            if (strtolower($key) != $thingtype && !is_numeric($key) ) {
                 $subtype.= " " . $key;
                 $k++;
             }
@@ -401,25 +464,18 @@ function makeThing($i, $kindex, $thesensor, $panelname, $postop=0, $posleft=0) {
         $tc.= "<div aid=\"$i\"  title=\"$thingtype\" class=\"thingname $thingtype t_$kindex\" id=\"s-$i\"><span class=\"n_$kindex\">" . $weathername . "</span></div>";
         $tc.= putElement($kindex, $i, 0, $thingtype, $thingvalue["temperature"], "temperature");
         $tc.= putElement($kindex, $i, 1, $thingtype, $thingvalue["feelsLike"], "feelsLike");
-        // $tc.= putElement($kindex, $i, 2, $thingtype, $thingvalue["city"], "city");
-        $tc.= "<br /><div aid=\"$i\" type=\"$thingtype\"  subid=\"weatherIcon\" title=\"" . $thingvalue["weatherIcon"] . "\" class=\"$thingtype" . " weatherIcon" . "\" id=\"a-$i"."-weatherIcon\">";
-        $iconstr = $thingvalue["weatherIcon"];
-        if (substr($iconstr,0,3) === "nt_") {
-            $iconstr = substr($iconstr,3);
+        $wiconstr = $thingvalue["weatherIcon"];
+        if (substr($wiconstr,0,3) === "nt_") {
+            $wiconstr = substr($wiconstr,3);
         }
-        $tc.= '<img src="media/' . $iconstr . '.png" alt="' . $thingvalue["weatherIcon"] . '" width="60" height="60">';
-        $tc.= '<br />' . $thingvalue["weatherIcon"];
-        $tc.= "</div>";
-        $tc.= "<div aid=\"$i\" type=\"$thingtype\"  subid=\"forecastIcon\" title=\"" . $thingvalue["forecastIcon"] ."\" class=\"$thingtype" . " forecastIcon" . "\" id=\"a-$i"."-forecastIcon\">";
-        $iconstr = $thingvalue["forecastIcon"];
-        if (substr($iconstr,0,3) === "nt_") {
-            $iconstr = substr($iconstr,3);
+        $ficonstr = $thingvalue["forecastIcon"];
+        if (substr($ficonstr,0,3) === "nt_") {
+            $ficonstr = substr($ficonstr,3);
         }
-        $tc.= '<img src="media/' . $iconstr . '.png" alt="' . $thingvalue["forecastIcon"] . '" width="60" height="60">';
-        $tc.= '<br />' . $thingvalue["forecastIcon"];
-        $tc.= "</div>";
-        $tc.= putElement($kindex, $i, 2, $thingtype, "Sunrise: " . $thingvalue["localSunrise"] . " Sunset: " . $thingvalue["localSunset"], "sunriseset");
-        $j = 3;
+        $tc.= putElement($kindex, $i, 2, $thingtype, $wiconstr, "weatherIcon");
+        $tc.= putElement($kindex, $i, 3, $thingtype, $ficonstr, "forecastIcon");
+        $tc.= putElement($kindex, $i, 4, $thingtype, "Sunrise: " . $thingvalue["localSunrise"] . " Sunset: " . $thingvalue["localSunset"], "sunriseset");
+        $j = 5;
         foreach($thingvalue as $tkey => $tval) {
             if ($tkey!=="temperature" &&
                 $tkey!=="feelsLike" &&
@@ -435,16 +491,14 @@ function makeThing($i, $kindex, $thesensor, $panelname, $postop=0, $posleft=0) {
                 $j++;
             }
         }
+        
     // temporary crude video tag hack - must replace the small.mp4 or small.ogv
     // with the video stream from your camera source or a video of your choice
     } else if ( $thingtype === "video") {
-        
-    // add video hack for quicktime support
         $vidname = $thingvalue["name"];
         $tkey = "url";
         $vidname = $thingvalue["url"];
         $tc.= "<div aid=\"$i\"  title=\"$thingtype status\" class=\"thingname $thingtype t_$kindex\" id=\"s-$i\"><span class=\"n_$kindex\">" . $thingpr . "</span></div>";
-        // wrap the video tag in our standard HP div pattern
         $tc.= "<div aid=\"$i\" type=\"$thingtype\"  subid=\"$tkey\" title=\"$vidname\" class=\"video url\" id=\"a-$i"."-$tkey\">";
         
         $tc.= '<video width="369" height="240" autoplay >';
@@ -477,6 +531,7 @@ function makeThing($i, $kindex, $thesensor, $panelname, $postop=0, $posleft=0) {
             $thingpr = $thingname;
         }
         $tc.= "<div aid=\"$i\"  title=\"$thingtype status\" class=\"thingname $thingtype t_$kindex\" id=\"s-$i\"><span class=\"n_$kindex\">" . $thingpr . "</span></div>";
+	
         // create a thing in a HTML page using special tags so javascript can manipulate it
         // multiple classes provided. One is the type of thing. "on" and "off" provided for state
         // for multiple attribute things we provide a separate item for each one
@@ -492,19 +547,33 @@ function makeThing($i, $kindex, $thesensor, $panelname, $postop=0, $posleft=0) {
                 $cval = $thingvalue["color"];
                 if ( preg_match("/^#[abcdefABCDEF\d]{6}/",$cval) ) {
                     $bgcolor = " style=\"background-color:$cval;\"";
-                    $tc.= putElement($kindex, $i, $j, $thingtype, $cval, "color", $subtype);
+                    $tc.= putElement($kindex, $i, $j, $thingtype, $cval, "color", $subtype, $bgcolor);
                     $j++;
                 }
             }
+
+			$vStatus = "";
+			$vLevel = 80;
             foreach($thingvalue as $tkey => $tval) {
                 // skip if ST signals it is watching a sensor that is failing
                 // also skip the checkInterval since we never display this
                 if ( strpos($tkey, "DeviceWatch-") === FALSE &&
                      strpos($tkey, "checkInterval") === FALSE && $tkey!=="color" ) { 
-                    $tc.= putElement($kindex, $i, $j, $thingtype, $tval, $tkey, $subtype, $bgcolor);
-                    $j++;
+                    $tc.= putElement($kindex, $i, $j, $thingtype, $tval, $tkey, $subtype, $bgcolor);				
+                    $j++;									
                 }
             }
+//				//Add overlay wrapper
+//				$tc.= "<div class=\"overlay v_$kindex\">";
+//				$tc.= "<div class=\"ovCaption vc_$kindex\">" . substr($thingvalue["name"],0,20) . "</div>";
+//				if($thingvalue["battery"]) {
+//					$tc.= "<div class=\"ovBattery " . $thingvalue["battery"] . " vb_$kindex\">";
+//					$tc.= "<div style=\"width: " . $thingvalue["battery"] . "%\" class=\"ovbLevel L" . (string)$thingvalue["battery"] . "\"></div></div>";
+//					next($thingvalue);	
+//				}
+//				$tc.= "<div class=\"ovStatus vs_$kindex\">" . next($thingvalue) . "</div>";
+//				$tc.= "</div>";
+				
         } else {
             $tc.= putElement($kindex, $i, 0, $thingtype, $thingvalue, "value", $subtype);
         }
@@ -516,31 +585,30 @@ function makeThing($i, $kindex, $thesensor, $panelname, $postop=0, $posleft=0) {
 function fixTrack($tval) {
     if ( trim($tval)==="" ) {
         $tval = "None"; 
-    } else if ( strpos($tval, "Grouped with") ) {
-        $tval = substr($tval,0, strpos($tval, "Grouped with"));
-        if (strlen($tval) > 74) { $tval = substr($tval,0,70) . " ..."; } 
-        $tval.= " (*)";
-    } else if ( strlen($tval) > 74) { 
-        $tval = substr($tval,0,70) . " ..."; 
+//    } else if ( strpos($tval, "Grouped with") ) {
+//        $tval = substr($tval,0, strpos($tval, "Grouped with"));
+//        if (strlen($tval) > 124) { $tval = substr($tval,0,120) . " ..."; } 
+//        $tval.= " (*)";
+    } else if ( strlen($tval) > 124) { 
+        $tval = substr($tval,0,120) . " ..."; 
     }
     return $tval;
 }
 
 function putElement($kindex, $i, $j, $thingtype, $tval, $tkey="value", $subtype="", $bgcolor="") {
     $tc = "";
-    
     // add a name specific tag to the wrapper class
     // and include support for hue bulbs - fix a few bugs too
-    if ( in_array($tkey, array("heat", "cool", "level", "vol", "hue", "saturation", "colorTemperature") )) {
+    if ( in_array($tkey, array("heat", "cool", "vol", "hue", "saturation") )) {
 //    if ($tkey=="heat" || $tkey=="cool" || $tkey=="level" || $tkey=="vol" ||
 //        $tkey=="hue" || $tkey=="saturation" || $tkey=="colorTemperature") {
         $tkeyval = $tkey . "-val";
-        if ( $bgcolor && (in_array($tkey, array("hue","saturation","colorTemperature"))) ) {
+        if ( $bgcolor && (in_array($tkey, array("hue","saturation"))) ) {
             $colorval = $bgcolor;
         } else {
             $colorval = "";
         }
-        $tc.= "<div class=\"$thingtype" . $subtype . " $tkey" . " p_$kindex\">";
+        $tc.= "<div class=\"overlay $thingtype $tkey" . " v_$kindex\">";
         $tc.= "<div aid=\"$i\" subid=\"$tkey\" class=\"$tkey-dn\"></div>";
         $tc.= "<div aid=\"$i\" subid=\"$tkey\" title=\"$tkey\"$colorval class=\"$tkeyval\" id=\"a-$i"."-$tkey\">" . $tval . "</div>";
         $tc.= "<div aid=\"$i\" subid=\"$tkey\" class=\"$tkey-up\"></div>";
@@ -549,19 +617,23 @@ function putElement($kindex, $i, $j, $thingtype, $tval, $tkey="value", $subtype=
         // add state of thing as a class if it isn't a number and is a single word
         // also prevent dates from adding details
         // and finally if the value is complex with spaces or other characters, skip
-        $extra = ($tkey==="track" || $thingtype=="clock" || $thingtype=="piston" || $tkey==="color" ||
+        $extra = ($tkey==="track" || $thingtype=="clock" || $tkey==="color" ||
                   is_numeric($tval) || $thingtype==$tval ||
                   $tval=="" || strpos($tval," ") || strpos($tval,"\"") ) ? "" : " " . $tval;    // || str_word_count($tval) > 1
-
+        
         // fix track names for groups, empty, and super long
         if ($tkey==="track") {
             $tval = fixTrack($tval);
+        } else if ( $tkey == "battery") {
+            $powmod = intval($tval);
+            $powmod = (string)($powmod - ($powmod % 10));
+            $tval = "<div style=\"width: " . $tval . "%\" class=\"ovbLevel L" . $powmod . "\"></div>";
         }
         
         // for music status show a play bar in front of it
         if ($tkey==="musicstatus") {
             // print controls for the player
-            $tc.= "<div class=\"music-controls" . $subtype . " p_$kindex\">";
+            $tc.= "<div class=\"overlay music-controls" . $subtype . " v_$kindex\">";
             $tc.= "<div  aid=\"$i\" subid=\"$tkey\" title=\"Previous\" class=\"music-previous\"></div>";
             $tc.= "<div  aid=\"$i\" subid=\"$tkey\" title=\"Pause\" class=\"music-pause\"></div>";
             $tc.= "<div  aid=\"$i\" subid=\"$tkey\" title=\"Play\" class=\"music-play\"></div>";
@@ -578,13 +650,13 @@ function putElement($kindex, $i, $j, $thingtype, $tval, $tkey="value", $subtype=
             $tkeyshow = " ".$tkey;
         }
         // include class for main thing type, the subtype, a sub-key, and a state (extra)
-        // make background the color based on value
-        if ( $bgcolor && $tkey=="color" ) {
-            $colorval = $bgcolor;
+        $tc.= "<div class=\"overlay $tkey v_$kindex\">";
+        if ( $tkey == "level" || $tkey=="colorTemperature" ) {
+            $tc.= "<div aid=\"$i\" type=\"$thingtype\"  subid=\"$tkey\" value=\"$tval\" title=\"$tkey\" class=\"" . $thingtype . $tkeyshow . " p_$kindex" . "\" id=\"a-$i-$tkey" . "\">" . "</div>";
         } else {
-            $colorval = "";
+            $tc.= "<div aid=\"$i\" type=\"$thingtype\"  subid=\"$tkey\" title=\"$tkey\" class=\"" . $thingtype . $subtype . $tkeyshow . " p_$kindex" . $extra . "\" id=\"a-$i-$tkey" . "\">" . $tval . "</div>";
         }
-        $tc.= "<div aid=\"$i\" type=\"$thingtype\"  subid=\"$tkey\" title=\"$tkey\"$colorval class=\"" . $thingtype . $subtype . $tkeyshow . " p_$kindex" . $extra . "\" id=\"a-$i-$tkey" . "\">" . $tval . "</div>";
+        $tc.= "</div>";
     }
     return $tc;
 }
@@ -635,10 +707,11 @@ function getNewPage(&$cnt, $allthings, $roomtitle, $kroom, $things, $indexoption
         }
         
         // include 4 customizable tiles on each page
-        $tc.="<div id=\"custom1-$roomname\" class=\"custom custom1 custom1-$roomname\"></div>";
-        $tc.="<div id=\"custom2-$roomname\" class=\"custom custom2 custom2-$roomname\"></div>";
-        $tc.="<div id=\"custom3-$roomname\" class=\"custom custom3 custom3-$roomname\"></div>";
-        $tc.="<div id=\"custom4-$roomname\" class=\"custom custom4 custom4-$roomname\"></div>";
+        // this was stupid... removed and replaced with generic iFrame real tiles
+//        $tc.="<div id=\"custom1-$roomname\" class=\"custom custom1 custom1-$roomname\"></div>";
+//        $tc.="<div id=\"custom2-$roomname\" class=\"custom custom2 custom2-$roomname\"></div>";
+//        $tc.="<div id=\"custom3-$roomname\" class=\"custom custom3 custom3-$roomname\"></div>";
+//        $tc.="<div id=\"custom4-$roomname\" class=\"custom custom4 custom4-$roomname\"></div>";
         // include a tile to toggle tabs on and off if in kioskmode
         // but no longer need to display it unless you really want to
         if ($kioskmode) {
@@ -667,6 +740,45 @@ function getNewPage(&$cnt, $allthings, $roomtitle, $kroom, $things, $indexoption
     // end this tab which is a different type of panel
     $tc.="</div>";
     return $tc;
+}
+
+function doHubitat($path, $swid, $swtype, $swval="none", $swattr="none") {
+    
+    // intercept clock things to return updated date and time
+    if ($swtype==="clock") {
+        $weekday = date("l");
+        $dateofmonth = date("M d, Y");
+        $timeofday = date("g:i a");
+        $timezone = date("T");
+        $response = array("weekday" => $weekday, "date" => $dateofmonth, "time" => $timeofday, "tzone" => $timezone);
+    } else if ($swtype ==="image") {
+        $response = array("url" => $swid);
+    } else {
+        $host = HUBITAT_HOST . "/apps/api/" . HUBITAT_ID . "/" . $path;
+        $headertype = array("Authorization: Bearer " . HUBITAT_ACCESS_TOKEN);
+        $nvpreq = "access_token=" . HUBITAT_ACCESS_TOKEN .
+                  "&swid=" . urlencode($swid) . "&swattr=" . urlencode($swattr) . 
+                  "&swvalue=" . urlencode($swval) . "&swtype=" . urlencode($swtype);
+        $response = curl_call($host, $headertype, $nvpreq, "POST");
+    
+        // update session with new status
+        if ( isset($_SESSION["allthings"]) ) {
+            $allthings = $_SESSION["allthings"];
+            $idx = $swtype . "|" . $swid;
+            if ( isset($allthings[$idx]) && $swtype==$allthings[$idx]["type"] ) {
+                $newval = array_merge($allthings[$idx]["value"], $response);
+                $allthings[$idx]["value"] = $newval;
+                $_SESSION["allthings"] = $allthings;
+            }
+        }
+        
+        if (!response) {
+            $response = array("name" => "Unknown", $swtype => $swval);
+        }
+    }
+    
+    return json_encode($response);
+    
 }
 
 function doAction($host, $access_token, $swid, $swtype, $swval="none", $swattr="none") {
@@ -749,7 +861,7 @@ function setOrder($endpt, $access_token, $swid, $swtype, $swval, $swattr, $siten
 //                $options["things"][$swattr] = $swval;
                 $options["things"][$swattr] = array();
                 foreach( $swval as $val) {
-                    $options["things"][$swattr][] = intval($val, 10);
+                    $options["things"][$swattr][] = array(intval($val, 10),0,0);
                 }
 //              $updated = print_r($swval,true);
                 $updated = true;
@@ -829,6 +941,7 @@ function writeOptions($options) {
     $str =  json_encode($options);
     fwrite($f, cleanupStr($str));
     fclose($f);
+	chmod($f, 0777);
 }
 
 // make the string easier to look at
@@ -864,7 +977,7 @@ function refactorOptions($allthings) {
                         "motion", "lock", "thermostat", "temperature", "music", "valve",
                         "door", "illuminance", "smoke", "water",
                         "weather", "presence", "mode", "piston", "other",
-                        "clock","blank","image","video");
+                        "clock","blank","image","frame","video");
     $cnt = 0;
     $oldoptions = readOptions();
     // $options = $oldoptions;
@@ -933,17 +1046,17 @@ function getOptions($allthings) {
                         "motion", "lock", "thermostat", "temperature", "music", "valve",
                         "door", "illuminance", "smoke", "water",
                         "weather", "presence", "mode", "piston", "other",
-                        "clock","blank","image","video");
+                        "clock","blank","image","frame","video");
 
     // generic room setup
     $defaultrooms = array(
-        "Kitchen" => "kitchen|sink|pantry|dinette|clock|hello|goodbye|goodnight" ,
-        "Family" => "family|mud|fireplace|casual|thermostat|weather",
-        "Living" => "living|dining|entry|front door|foyer",
-        "Office" => "office|computer|desk|work|clock",
-        "Bedrooms" => "bedroom|kid|kids|bathroom|closet|master|guest",
-        "Outside" => "garage|yard|outside|porch|patio|driveway",
-        "Music" => "sonos|music|tv|television|alexa|stereo|bose|samsung|amp"
+        "Kitchen" => "clock|weather|kitchen|sink|pantry|dinette" ,
+        "Family" => "clock|family|mud|fireplace|casual|thermostat",
+        "Living" => "clock|living|dining|entry|front door|foyer",
+        "Office" => "clock|office|computer|desk|work",
+        "Bedrooms" => "clock|bedroom|kid|kids|bathroom|closet|master|guest",
+        "Outside" => "clock|garage|yard|outside|porch|patio|driveway",
+        "Music" => "clock|sonos|music|tv|television|alexa|echo|stereo|bose|samsung|amp"
     );
     
     // read options from a local server file
@@ -1118,7 +1231,7 @@ function mysortfunc($cmpa, $cmpb) {
                         "motion", "lock", "thermostat", "temperature", "music", "valve",
                         "door", "illuminance", "smoke", "water",
                         "weather", "presence", "mode", "piston", "other",
-                        "clock","blank","image","video");
+                        "clock","blank","image","frame","video");
     $namea = $cmpa["name"];
     $typea = $cmpa["type"];
     $nameb = $cmpb["name"];
@@ -1141,7 +1254,7 @@ function getOptionsPage($options, $retpage, $allthings, $sitename) {
                         "motion", "lock", "thermostat", "temperature", "music", "valve",
                         "door", "illuminance", "smoke", "water",
                         "weather", "presence", "mode", "piston", "other",
-                        "clock","blank","image","video");
+                        "clock","blank","image","frame","video");
     
     $roomoptions = $options["rooms"];
     $thingoptions = $options["things"];
@@ -1156,8 +1269,10 @@ function getOptionsPage($options, $retpage, $allthings, $sitename) {
     $tc.= "<form id=\"optionspage\" class=\"options\" name=\"options" . "\" action=\"$retpage\"  method=\"POST\">";
     $tc.= hidden("options",1);
     $tc.= "<div class=\"skinoption\">Skin directory name: <input id=\"skinid\" width=\"240\" type=\"text\" name=\"skin\"  value=\"$skinoptions\"/></div>";
-    $tc.= "<div class=\"kioskoption\">Kiosk Mode: ";
-    $tc.= "<input id=\"kioskid\" width=\"240\" type=\"text\" name=\"kiosk\"  value=\"$kioskoptions\"/></div>";
+    $tc.= "<label for=\"kioskid\" class=\"kioskoption\">Kiosk Mode: </label>";
+    
+    $kstr = $kioskoptions=="true" ? "checked" : "";
+    $tc.= "<input id=\"kioskid\" width=\"24\" type=\"checkbox\" name=\"kiosk\"  value=\"$kioskoptions\" $kstr/></div>";
     $tc.= "<div class=\"filteroption\">Option Filters: </div>";
     $tc.= "<table class=\"useroptions\"><tr>";
     $i= 0;
@@ -1245,6 +1360,11 @@ function getOptionsPage($options, $retpage, $allthings, $sitename) {
                 $str_on="on";
                 $str_off="off";
                 break;
+            
+            case "momentary":
+                $str_on="on";
+                $str_off="off";
+                break;
                 
             case "contact":
             case "door":
@@ -1262,15 +1382,34 @@ function getOptionsPage($options, $retpage, $allthings, $sitename) {
                 $str_on="locked";
                 $str_off="unlocked";
                 break;
+            
+            case "clock":
+                $str_type = "time";
+                break;
+            
+            case "thermostat":
+            case "temperature":
+                $str_type = "temperature";
+                break;
+            
+            case "piston":
+                $str_type = "pistonName";
+                $str_on="firing";
+                $str_off="idle";
+                break;
+            
+            case "video":
+                $str_edit="hidden";
+                break;
                 
-            default:
-            	$str_edit="hidden";
+//            default:
+//            	$str_edit="hidden";
         }       
 
         $thingname = $thesensor["name"];
         $iconflag = "editable " . strtolower($thingname);
-
-        $tc.= "<td class=\"customedit\"><span id=\"btn_$thingindex\" class=\"btn $str_edit\" onclick=\"editTile('$str_type', '$thingname', '$thingindex', '$str_on', '$str_off')\">Edit</span></td>";
+        
+        $tc.= "<td class=\"customedit\"><span id=\"btn_$thingindex\" class=\"btn $str_edit\" onclick=\"editTile('$str_type', '$thingindex', '$str_on', '$str_off')\">Edit</span></td>";
         $tc.= "<td class=\"customname\"><span class=\"n_$thingindex\">$thingname</span></td>";
 
         // loop through all the rooms in proper order
@@ -1362,7 +1501,7 @@ function processOptions($optarray) {
                         "motion", "lock", "thermostat", "temperature", "music", "valve",
                         "door", "illuminance", "smoke", "water",
                         "weather", "presence", "mode", "piston", "other",
-                        "clock","blank","image","video");
+                        "clock","blank","image","frame","video");
     
     $oldoptions = readOptions();
     $skindir = $oldoptions["skin"];
@@ -1388,7 +1527,12 @@ function processOptions($optarray) {
             $skindir = $val;
         }
         else if ( $key=="kiosk") {
-            $options["kiosk"] = strtolower($val);
+            if ( $val ) {
+                $options["kiosk"] = "true";
+            } else {
+                $options["kiosk"] = "false";
+            }
+//            $options["kiosk"] = strtolower($val);
         }
         else if ( $key=="useroptions" && is_array($val) ) {
             $newuseroptions = $val;
@@ -1568,7 +1712,6 @@ function is_ssl() {
 
     // initial call or a content load or ajax call
     $tc = "";
-    $first = false;
     $endpt = false;
     $access_token = false;
 
@@ -1585,35 +1728,20 @@ function is_ssl() {
         $access_token = $_REQUEST["hmtoken"];
         $endpt = $_REQUEST["hmendpoint"];
     }
-    if ( $access_token && $endpt ) {
-        if (USER_SITENAME!==FALSE) {
-            $sitename = USER_SITENAME;
-        } else if ( isset($_COOKIE["hmsitename"]) ) {
-            $sitename = $_COOKIE["hmsitename"];
-        } else {
-            $sitename = "SmartHome";
-            // setcookie("hmsitename", $sitename, $expiry, "/", $serverName);
-        }
 
-        if (DEBUG) {       
-            $tc.= "<div class=\"debug\">";
-            $tc.= "access_token = $access_token<br />";
-            $tc.= "endpt = $endpt<br />";
-            $tc.= "sitename = $sitename<br />";
-            if (USER_ACCESS_TOKEN!==FALSE && USER_ENDPT!==FALSE) {
-                $tc.= "cookies skipped - user provided the access_token and endpt values listed above<br />";
-            } else {
-                $tc.= "<br />cookies = <br /><pre>";
-                $tc.= print_r($_COOKIE, true);
-                $tc.= "</pre>";
-            }
-            $tc.= "</div>";
-        }
+    // get the site name
+    if (USER_SITENAME!==FALSE) {
+        $sitename = USER_SITENAME;
+    } else if ( isset($_COOKIE["hmsitename"]) ) {
+        $sitename = $_COOKIE["hmsitename"];
+    } else {
+        $sitename = "SmartHome";
     }
+    
+    $valid = ( ($access_token && $endpt) || ( HUBITAT_HOST && HUBITAT_ID && HUBITAT_ACCESS_TOKEN ) );
 
     // cheeck if cookies are set
-    if (!$endpt || !$access_token) {
-        $first = true;
+    if ( ! $valid ) {
         unset($_SESSION["allthings"]);
         $tc .= "<div><h2>" . APPNAME . "</h2>";
         $tc.= authButton("SmartHome", $returnURL);
@@ -1634,15 +1762,15 @@ function is_ssl() {
     $swattr = "";
     $tileid = "";
     if ( isset($_GET["useajax"]) ) { $useajax = $_GET["useajax"]; }
+    else if ( isset($_POST["useajax"]) ) { $useajax = $_POST["useajax"]; }
     if ( isset($_GET["type"]) ) { $swtype = $_GET["type"]; }
+    else if ( isset($_POST["type"]) ) { $swtype = $_POST["type"]; }
     if ( isset($_GET["id"]) ) { $swid = $_GET["id"]; }
-    if ( isset($_POST["useajax"]) ) { $useajax = $_POST["useajax"]; }
-    if ( isset($_POST["type"]) ) { $swtype = $_POST["type"]; }
-    if ( isset($_POST["id"]) ) { $swid = $_POST["id"]; }
+    else if ( isset($_POST["id"]) ) { $swid = $_POST["id"]; }
 
     // implement ability to use tile number to get the $swid information
     if ( isset($_GET["tile"]) ) { $tileid = $_GET["tile"]; }
-    if ( isset($_POST["tile"]) ) { $tileid = $_POST["tile"]; }
+    else if ( isset($_POST["tile"]) ) { $tileid = $_POST["tile"]; }
     if ( $swid=="" && $tileid ) {
         $oldoptions = readOptions();
         $idx = array_search($tileid, $oldoptions["index"]);
@@ -1657,7 +1785,7 @@ function is_ssl() {
         if ( array_key_exists($idx, $options) ) { $tileid = $options[$idx]; }
     }
     
-    if ( $useajax && $endpt && $access_token ) {
+    if ( $useajax && $valid ) {
         switch ($useajax) {
             case "doaction":
                 if ( isset($_GET["value"]) ) { $swval = $_GET["value"]; }
@@ -1666,10 +1794,31 @@ function is_ssl() {
                 if ( isset($_POST["attr"]) ) { $swattr = $_POST["attr"]; }
                 echo doAction($endpt . "/doaction", $access_token, $swid, $swtype, $swval, $swattr);
                 break;
+                
+            case "dohubitat":
+                if ( isset($_GET["value"]) ) { $swval = $_GET["value"]; }
+                if ( isset($_GET["attr"]) ) { $swattr = $_GET["attr"]; }
+                if ( isset($_POST["value"]) ) { $swval = $_POST["value"]; }
+                if ( isset($_POST["attr"]) ) { $swattr = $_POST["attr"]; }
+                echo doHubitat("doaction", $swid, $swtype, $swval, $swattr);
+                break;
         
             case "doquery":
                 // echo "tile = $tileid <br />id = $swid <br />type = $swtype <br />token = $access_token <br />";
                 echo doAction($endpt . "/doquery", $access_token, $swid, $swtype);
+                break;
+        
+            case "queryhubitat":
+                // echo "tile = $tileid <br />id = $swid <br />type = $swtype <br />token = $access_token <br />";
+                echo doHubitat("doquery", $swid, $swtype);
+                break;
+        
+            case "wysiwyg":
+                // echo "tile = $tileid <br />id = $swid <br />type = $swtype <br />token = $access_token <br />";
+                $idx = $swtype . "|" . $swid;
+                $allthings = getAllThings($endpt, $access_token);
+                $thesensor = $allthings[$idx];
+                echo makeThing(0, $tileid, $thesensor, "Options");
                 break;
         
             case "pageorder":
@@ -1679,6 +1828,18 @@ function is_ssl() {
                 if ( isset($_POST["attr"]) ) { $swattr = $_POST["attr"]; }
                 echo setOrder($endpt, $access_token, $swid, $swtype, $swval, $swattr, $sitename, $returnURL);
                 break;
+                
+            case "confighubitat":
+                if ( isset($_GET["value"]) ) { $swval = $_GET["value"]; }
+                if ( isset($_GET["attr"]) ) { $swattr = $_GET["attr"]; }
+                if ( isset($_POST["value"]) ) { $swval = $_POST["value"]; }
+                if ( isset($_POST["attr"]) ) { $swattr = $_POST["attr"]; }
+                echo $swattr . " " . $swval;
+                setcookie("hubitatToken", $swattr, $expiry, "/", $serverName);
+                setcookie("hubitatID", $swval, $expiry, "/", $serverName);
+                exit(0);
+                break;
+                
         
             // implement free form drag drap capability
             case "dragdrop":
@@ -1712,8 +1873,6 @@ function is_ssl() {
                 
                 unset($_SESSION["allthings"]);
                 $allthings = getAllThings($endpt, $access_token);
-    
-                // reload the page
                 $location = $returnURL;
                 header("Location: $location");
                 break;
@@ -1728,6 +1887,9 @@ function is_ssl() {
                 $tc.= "<div>sitename = $sitename </div>";
                 $tc.= "<div>access_token = $access_token </div>";
                 $tc.= "<div>endpt = $endpt </div>";
+                $tc.= "<div>Hubitat Hub IP = " . HUBITAT_HOST . "</div>";
+                $tc.= "<div>Hubitat ID = " . HUBITAT_ID . "</div>";
+                $tc.= "<div>Hubitat Token = " . HUBITAT_ACCESS_TOKEN . "</div>";
                 $tc.= "<div>url = $returnURL </div>";
                 $tc.= "<table class=\"showid\">";
                 $tc.= "<thead><tr><th class=\"thingname\">" . "Name" . "</th><th class=\"thingvalue\">" . "Thing Value" . 
@@ -1777,7 +1939,7 @@ function is_ssl() {
     
     // final save options step involves reloading page via submit action
     // because just about everything could have changed
-    if ($endpt && $access_token && isset($_POST["options"])) {
+    if ( $valid && isset($_POST["options"])) {
         $location = $returnURL;
         header("Location: $location");
         exit(0);
@@ -1785,17 +1947,8 @@ function is_ssl() {
 
 // ********************************************************************************************
 
-    // *** check for errors ***
-    if ( isset($_SESSION['curl_error_no']) ) {
-        $tc.= "<br /><div class=\"error\">Errors detected<br />";
-        $tc.= "Error number: " . $_SESSION['curl_error_no'] . "<br />";
-        $tc.= "Found Error msg:    " . $_SESSION['curl_error_msg'] . "</div>";
-        unset($_SESSION['curl_error_no']);
-        unset($_SESSION['curl_error_msg']);
-        $skindir = "skin-housepanel";
-        
     // display the main page
-    } else if ( $access_token && $endpt ) {
+    if ( $valid ) {
     
 //        if ($sitename) {
 //            $tc.= authButton($sitename, $returnURL);
@@ -1836,7 +1989,7 @@ function is_ssl() {
             
             // use the list of things in this room
             if ($room !== FALSE) {
-                $tc.= "<li class=\"drag\"><a href=\"#" . strtolower($room) . "-tab\">$room</a></li>";
+                $tc.= "<li class=\"tab-$room\"><a href=\"#" . strtolower($room) . "-tab\">$room</a></li>";
             }
         }
         
@@ -1875,36 +2028,24 @@ function is_ssl() {
         
         // create button to show the Options page instead of as a Tab
         // but only do this if we are not in kiosk mode
-        $tc.= "<div class=\"buttons\">";
+        $tc.= "<form>";
+        $tc.= hidden("returnURL", $returnURL);
+        $tc.= "<div id=\"controlpanel\">";
         if ( !$kioskmode ) {
-            $tc.= "<form class=\"buttons\" action=\"$returnURL\"  method=\"POST\">";
-            $tc.= hidden("useajax", "showoptions");
-            $tc.= hidden("type", "none");
-            $tc.= hidden("id", 0);
-            $tc.= "<input class=\"submitbutton\" value=\"Options\" name=\"submitoption\" type=\"submit\" />";
-            $tc.= "</form>";
-            $tc.= "<form class=\"buttons\" action=\"$returnURL\"  method=\"POST\">";
-            $tc.= hidden("useajax", "refresh");
-            $tc.= hidden("type", "none");
-            $tc.= hidden("id", 0);
-            $tc.= "<input class=\"submitbutton\" value=\"Refresh\" name=\"submitrefresh\" type=\"submit\" />";
-            $tc.= "</form>";
+            $tc.='<div id="showoptions" class="formbutton">Options</div>';
+            $tc.='<div id="refresh" class="formbutton">Refresh</div>';
+            $tc.='<div id="refactor" class="formbutton">Refactor</div>';
+            $tc.='<div id="showid" class="formbutton">Show ID\'s</div>';
             $tc.='<div id="restoretabs" class="restoretabs">Hide Tabs</div>';
-        }
-        $tc.='</div>';
-   
-    } else {
 
-// this should never ever happen...
-        if (!$first) {
-            echo "<br />Invalid request... you are not authorized for this action.";
-            // echo "<br />access_token = $access_token";
-            // echo "<br />endpoint = $endpt";
-            echo "<br /><br />";
-            echo $tc;
-            exit;    
+            $tc.= "<div class=\"modeoptions\" id=\"modeoptions\">
+              <input class=\"radioopts\" type=\"radio\" name=\"usemode\" value=\"Operate\" checked><span class=\"radioopts\">Operate</span>
+              <input class=\"radioopts\" type=\"radio\" name=\"usemode\" value=\"Reorder\" ><span class=\"radioopts\">Reorder</span>
+              <input class=\"radioopts\" type=\"radio\" name=\"usemode\" value=\"DragDrop\" ><span class=\"radioopts\">Drag</div>
+            </div><div id=\"opmode\"></div>";
         }
-    
+        $tc.="</div>";
+        $tc.= "</form>";
     }
 
     // display the dynamically created web site

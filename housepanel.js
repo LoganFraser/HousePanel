@@ -5,13 +5,309 @@ var popupCell = null;
 var popupSave = "";
 var popupRoom = "";
 var popupVal = 0;
+var priorOpmode = "Operate";
+var returnURL = "housepanel.php";
+
+Number.prototype.pad = function(size) {
+    var s = String(this);
+    while (s.length < (size || 2)) {s = "0" + s;}
+    return s;
+}
+
+function setCookie(cname, cvalue, exdays) {
+    if ( !exdays ) exdays = 30;
+    var d = new Date();
+    d.setTime(d.getTime() + (exdays*24*60*60*1000));
+    var expires = "expires="+ d.toUTCString();
+    document.cookie = cname + "=" + cvalue + ";" + expires + ";path=/";
+}
+
+function getCookie(cname) {
+    var name = cname + "=";
+    var decodedCookie = decodeURIComponent(document.cookie);
+    var ca = decodedCookie.split(';');
+    for(var i = 0; i <ca.length; i++) {
+        var c = ca[i];
+        while (c.charAt(0) == ' ') {
+            c = c.substring(1);
+        }
+        if (c.indexOf(name) == 0) {
+            return c.substring(name.length, c.length);
+        }
+    }
+    return "";
+}
 
 window.addEventListener("load", function(event) {
+//$(document).ready( function() {
+
+    // set the global return URL value
+    returnURL = $("input[name='returnURL']").val();
+    $(document).data('returnURL',returnURL);
+    
     $( "#tabs" ).tabs();
+    
+    // get default tab from cookie
+    var defaultTab = getCookie( 'defaultTab' );
+    if ( defaultTab ) {
+        $("#"+defaultTab).click();
+    }
     
 //    var cookies = decodeURIComponent(document.cookie);
 //    cookies = cookies.split(';');
 //    alert(strObject(cookies));
+    
+    // setupPagemove();
+    // setupDraggable();
+
+    // disable return key
+    $("form.options").keypress(function(e) {
+        if ( e.keyCode===13  && popupStatus===1){
+            processPopup();
+            return false;
+        }
+        else if (e.keyCode===13) {
+            return false;
+        } else if ( e.keyCode===27 && popupStatus===1 ){
+            disablePopup();
+        }
+    });
+    
+    // set up popup editing - disabled because it is broken
+    // setupPopup();
+        
+    // setup time based updater
+    setupTimers();
+    
+    // set up option box clicks
+    setupFilters();
+    
+    setupHideTabs();
+    
+    setupButtons();
+    
+    setupSaveButton();
+    
+    setupSliders();
+    
+    // setup click on a page
+    // this appears to be painfully slow so disable
+    setupTabclick();
+    
+    setupColors();
+});
+
+function rgb2hsv(r, g, b) {
+     //remove spaces from input RGB values, convert to int
+     var r = parseInt( (''+r).replace(/\s/g,''),10 ); 
+     var g = parseInt( (''+g).replace(/\s/g,''),10 ); 
+     var b = parseInt( (''+b).replace(/\s/g,''),10 ); 
+
+    if ( r==null || g==null || b==null ||
+         isNaN(r) || isNaN(g)|| isNaN(b) ) {
+        return {"hue": 0, "saturation": 0, "level": 0};
+    }
+    
+    if (r<0 || g<0 || b<0 || r>255 || g>255 || b>255) {
+        return {"hue": 0, "saturation": 0, "level": 0};
+    }
+    r /= 255, g /= 255, b /= 255;
+
+    var max = Math.max(r, g, b), min = Math.min(r, g, b);
+    var h, s, v = max;
+
+    var d = max - min;
+    s = max == 0 ? 0 : d / max;
+
+    if (max == min) {
+    h = 0; // achromatic
+    } else {
+        switch (max) {
+            case r: h = (g - b) / d + (g < b ? 6 : 0); break;
+            case g: h = (b - r) / d + 2; break;
+            case b: h = (r - g) / d + 4; break;
+        }
+
+        h /= 6;
+    }
+    h = Math.floor(h * 100);
+    s = Math.floor(s * 100);
+    v = Math.floor(v * 100);
+
+    return {"hue": h, "saturation": s, "level": v};
+}
+
+function setupColors() {
+    
+   $("div.overlay.color >div.color").each( function() {
+        var that = $(this);
+        $(this).minicolors({
+            position: "bottom left",
+            defaultValue: $(this).html(),
+            theme: 'default',
+            change: function(hex) {
+                try {
+                    // console.log( "color: " + hex + " = " + $(this).minicolors("rgbaString") );
+                    that.html(hex);
+                    var aid = that.attr("aid");
+                    that.css({"background-color": hex});
+                    var huetag = $("#a-"+aid+"-hue");
+                    var sattag = $("#a-"+aid+"-saturation");
+                    if ( huetag ) { huetag.css({"background-color": hex}); }
+                    if ( sattag ) { sattag.css({"background-color": hex}); }
+                } catch(e) {}
+            },
+            hide: function() {
+                var newcolor = $(this).minicolors("rgbObject");
+                var hsl = rgb2hsv( newcolor.r, newcolor.g, newcolor.b );
+                var hslstr = "hsl("+hsl.hue.pad(3)+","+hsl.saturation.pad(3)+","+hsl.level.pad(3)+")";
+                var aid = that.attr("aid");
+                var tile = '#t-'+aid;
+                var bid = $(tile).attr("bid");
+                var bidupd = bid;
+                var thetype = $(tile).attr("type");
+                var ajaxcall = "doaction";
+                if ( bid.startsWith("h_") ) {
+                    ajaxcall = "dohubitat";
+                    bid = bid.substring(2);
+                }
+//                 alert("posting change to color= hsl= " + hslstr + " bid= " + bid);
+                $.post("housepanel.php", 
+                       {useajax: ajaxcall, id: bid, type: thetype, value: hslstr, attr: "color"},
+                       function (presult, pstatus) {
+                            if (pstatus==="success" ) {
+                                updAll("color",aid,bidupd,thetype,presult);
+                            }
+                       }, "json"
+                );
+            }
+        });
+    });   
+}
+
+function setupSliders() {
+    $("div.overlay.level >div.level").slider({
+        orientation: "horizontal",
+        min: 0,
+        max: 100,
+        step: 5,
+        stop: function( evt, ui) {
+            var thing = $(evt.target);
+            thing.attr("value",ui.value);
+            
+            var aid = thing.attr("aid");
+            var tile = '#t-'+aid;
+            var bid = $(tile).attr("bid");
+            var bidupd = bid;
+            var ajaxcall = "doaction";
+            if ( bid.startsWith("h_") ) {
+                ajaxcall = "dohubitat";
+                bid = bid.substring(2);
+            }
+            var thetype = $(tile).attr("type");
+            
+            // handle music volume different than lights
+            if ( thetype != "music") {
+                $.post("housepanel.php", 
+                       {useajax: ajaxcall, id: bid, type: thetype, value: parseInt(ui.value), attr: "level"},
+                       function (presult, pstatus) {
+                            if (pstatus==="success" ) {
+                                // alert( strObject(presult) );
+                                updAll("slider",aid,bidupd,thetype,presult);
+//                                updateTile(aid, presult);
+                            }
+                       }, "json"
+                );
+            } else {
+                $.post("housepanel.php", 
+                       {useajax: ajaxcall, id: bid, type: thetype, value: parseInt(ui.value), attr: "level"},
+                       function (presult, pstatus) {
+                            if (pstatus==="success" ) {
+                                // alert( strObject(presult) );
+                                updateTile(aid, presult);
+                            }
+                       }, "json"
+                );
+                
+            }
+        }
+    });
+
+    // set the initial slider values
+    $("div.overlay.level >div.level").each( function(){
+        var initval = $(this).attr("value");
+        // alert("setting up slider with value = " + initval);
+        $(this).slider("value", initval);
+    });
+
+    // now set up all colorTemperature sliders
+    $("div.overlay.colorTemperature >div.colorTemperature").slider({
+        orientation: "horizontal",
+        min: 2000,
+        max: 6000,
+        step: 200,
+        stop: function( evt, ui) {
+            var thing = $(evt.target);
+            thing.attr("value",ui.value);
+            
+            var aid = thing.attr("aid");
+            var tile = '#t-'+aid;
+            var bid = $(tile).attr("bid");
+            var bidupd = bid;
+            var ajaxcall = "doaction";
+            if ( bid.startsWith("h_") ) {
+                ajaxcall = "dohubitat";
+                bid = bid.substring(2);
+            }
+            var thetype = $(tile).attr("type");
+            
+            $.post("housepanel.php", 
+                   {useajax: ajaxcall, id: bid, type: thetype, value: parseInt(ui.value), attr: "colorTemperature" },
+                   function (presult, pstatus) {
+                        if (pstatus==="success" ) {
+                            // alert( strObject(presult) );
+                            updAll("slider",aid,bidupd,thetype,presult);
+//                                updateTile(aid, presult);
+                        }
+                   }, "json"
+            );
+        }
+    });
+
+    // set the initial slider values
+    $("div.overlay.colorTemperature >div.colorTemperature").each( function(){
+        var initval = $(this).attr("value");
+        // alert("setting up slider with value = " + initval);
+        $(this).slider("value", initval);
+    });
+    
+}
+
+function cancelDraggable() {
+    $("div.thing").each(function(){
+        if ( $(this).draggable("instance") ) {
+            $(this).draggable("destroy");
+        }
+    });
+}
+
+function cancelSortable() {
+    $("div.panel").each(function(){
+        if ( $(this).sortable("instance") ) {
+            $(this).sortable("destroy");
+        }
+    });
+}
+
+function cancelPagemove() {
+    $("ul.ui-tabs-nav").each(function(){
+        if ( $(this).sortable("instance") ) {
+            $(this).sortable("destroy");
+        }
+    });
+}
+
+function setupPagemove() {
     
     // make the room tabs sortable
     // the change function does a post to make it permanent
@@ -52,13 +348,41 @@ window.addEventListener("load", function(event) {
             );
         }
     });
+}
 
-    // make the actual thing tiles on each panel sortable
-    // the change function does a post to make it permanent
+function setupSortable() {
+
+    $("div.panel").sortable({
+        containment: "parent",
+        scroll: false,
+        items: "> div",
+        delay: 50,
+//        grid: [10, 10],
+        stop: function(event, ui) {
+            var tile = $(ui.item).attr("tile");
+            var roomtitle = $(ui.item).attr("panel");
+            var things = [];
+            $("div.thing[panel="+roomtitle+"]").each(function(){
+                things.push($(this).attr("tile"));
+            });
+            
+//            alert("Sorted thing: "+tile+" room: "+roomtitle+" things: "+strObject(things));
+            $.post("housepanel.php", 
+                   {useajax: "pageorder", id: "none", type: "things", value: things, attr: roomtitle}
+            );
+        }
+    });
+        
+    
+}
+
+function setupDraggable() {
+    
     $("div.thing").draggable({
         revert: false,
         containment: "parent",
         delay: 50,
+        grid: [10, 10],
         stop: function(event, ui) {
             var dragthing = {};
             dragthing["id"] = $(event.target).attr("id");
@@ -78,37 +402,61 @@ window.addEventListener("load", function(event) {
             );
         }
     });
+    
+}
 
-    // disable return key
-    $("form.options").keypress(function(e) {
-        if ( e.keyCode===13  && popupStatus===1){
-            processPopup();
-            return false;
-        }
-        else if (e.keyCode===13) {
-            return false;
-        } else if ( e.keyCode===27 && popupStatus===1 ){
-            disablePopup();
+function dynoForm(ajaxcall, idval, typeval) {
+    idval = idval ? idval : 0;
+    typeval = typeval ? typeval : "none";
+    var controlForm = $('<form>', {'name': 'controlpanel', 'action': returnURL, 'target': '_top', 'method': 'POST'});
+    controlForm.appendTo("body");
+    // alert("Posting form for ajaxcall= " + ajaxcall + " to: " + retval);
+    // lets now add the hidden fields we need to post our form
+    controlForm.append(
+                  $('<input>', {'name': 'useajax', 'value': ajaxcall, 'type': 'hidden'})
+        ).append(
+                  $('<input>', {'name': 'id', 'value': idval, 'type': 'hidden'})
+        ).append(
+                  $('<input>', {'name': 'type', 'value': typeval, 'type': 'hidden'})
+        );
+    return controlForm;
+}
+
+function setupButtons() {
+
+//    $("#optionsbutton").on("click", null, function(evt) {
+    $("#controlpanel").on("click", "div.formbutton", function() {
+        var buttonid = $(this).attr("id");
+        var newForm = dynoForm(buttonid);
+        newForm.submit();
+    });
+
+    $("div.modeoptions").on("click","input.radioopts",function(evt){
+        var opmode = $(this).attr("value");
+        if ( opmode !== priorOpmode ) {
+            if ( opmode=="Reorder" ) {
+                cancelDraggable();
+                cancelPagemove();
+                setupSortable();
+                setupPagemove();
+            } else if ( opmode=="DragDrop" ) {
+                cancelSortable();
+                cancelPagemove();
+                setupDraggable();
+                setupPagemove();
+            } else if ( opmode=="Operate" ) {
+                cancelDraggable();
+                cancelSortable();
+                cancelPagemove();
+            }
+            priorOpmode = opmode;
+            $("#opmode").html("Mode set to: " + opmode );
+            $("#opmode").show();
+            $("#opmode").hide("fade",null,2000);
         }
     });
-    
-    // set up popup editing
-    setupPopup();
-        
-    // setup time based updater
-    setupTimers();
-    
-    // set up option box clicks
-    setupFilters();
-    
-    setupHideTabs();
-    
-    setupSaveButton();
-    // setup click on a page
-    // this appears to be painfully slow so disable
-    // setupTabclick();
-});
-    
+}
+
 function setupSaveButton() {
     
     $("#submitoptions").click(function(evt) {
@@ -154,9 +502,9 @@ function setupFilters() {
         var rowcnt = 0;
         var odd = "";
         $('tr[type="'+theval+'"]').each(function() {
-            var theclass = $(this).attr("class");
+//            var theclass = $(this).attr("class");
             if ( ischecked ) {
-                $(this).attr("class", "showrow"+odd);
+                $(this).attr("class", "showrow");
             } else {
                 $(this).attr("class", "hiderow");
            }
@@ -234,20 +582,20 @@ function setupHideTabs() {
         }, 3000);
     });
     */
-   // restore tabs by click on open panel, clock, or the hide tabs button
+   // restore tabs by click on open panel or the hide tabs button
    // first two methods must be used in kiosk mode
-    $(".restoretabs, div.clock, div.panel").click(function(e) {
+    $("#restoretabs, div.panel").click(function(e) {
         if (e.target == this) {
-            var hidestatus = $(".restoretabs").html();
-            if (hidestatus=="Hide Tabs") {
-                $("#roomtabs").addClass("hidden");
-                $(".restoretabs").html("Show Tabs");
-            } else if (hidestatus=="Show Tabs") {
+            var hidestatus = $("#restoretabs");
+            if ( $("#roomtabs").hasClass("hidden") ) {
                 $("#roomtabs").removeClass("hidden");
-                $(".restoretabs").html("Hide Tabs");
+                if ( hidestatus ) hidestatus.html("Hide Tabs");
+            } else {
+                $("#roomtabs").addClass("hidden");
+                if ( hidestatus ) hidestatus.html("Show Tabs");
             }
         }
-    })
+    });
 }
 
 var jeditTableCell = function(event) {
@@ -346,6 +694,17 @@ function lenObject(o) {
   return cnt;
 }
 
+function fixTrack(tval) {
+    if ( tval.trim() === "" ) {
+        tval = "None"; 
+    } 
+    else if ( tval.length > 124) { 
+        tval = tval.substring(0,120) + " ..."; 
+    }
+    return tval;
+}
+
+
 // update all the subitems of any given specific tile
 // note that some sub-items can update the values of other subitems
 // this is exactly what happens in music tiles when you hit next and prev song
@@ -365,57 +724,91 @@ function updateTile(aid, presult) {
             // single word text fields like open/closed/on/off
             // this avoids putting names of songs into classes
             // also only do this if the old class was there in the first place
-            if ( oldclass && oldvalue && value &&
-                 $.isNumeric(value)===false && 
-                 $.isNumeric(oldvalue)===false &&
-                 oldclass.indexOf(oldvalue)>=0 ) 
-            {
-                $(targetid).removeClass(oldvalue);
-                $(targetid).addClass(value);
+            // also handle special case of battery and music elements
+            if ( key=="battery") {
+                var powmod = parseInt(value);
+                powmod = powmod - (powmod % 10);
+                value = "<div style=\"width: " + powmod.toString() + "%\" class=\"ovbLevel L" + powmod.toString() + "\"></div>";
+            } else if ( key=="track") {
+                value = fixTrack(value);
+            }
+            // handle weather icons
+            else if ( key==="weatherIcon" || key==="forecastIcon") {
+                if ( value.substring(0,3) === "nt_") {
+                    value = value.substring(3);
+                }
+                if ( oldvalue != value ) {
+                    $(targetid).removeClass(oldvalue);
+                    $(targetid).addClass(value);
+                }
+//                value = "<img src=\"media/" + iconstr + ".png\" alt=\"" + iconstr + "\" width=\"60\" height=\"60\">";
+//                value += "<br />" + iconstr;
+            } else if ( (key == "level" || key == "colorTemperature") && $(targetid).slider ) {
+//                var initval = $(this).attr("value");
+                $(targetid).slider("value", value);
+                value = false;
+            } else if ( key=="color") {
+//                alert("updating color: "+value);
+                $(targetid).html(value);
+//                setupColors();
+            } else if ( oldclass && oldvalue && value &&
+                     $.isNumeric(value)===false && 
+                     $.isNumeric(oldvalue)===false &&
+                     oldclass.indexOf(oldvalue)>=0 ) {
+                    $(targetid).removeClass(oldvalue);
+                    $(targetid).addClass(value);
+                
             }
 
-            // update the content 
-            if (oldvalue && value) {
-                $(targetid).html(value);
+                // update the content 
+                if (oldvalue && value) {
+                    $(targetid).html(value);
+                }
             }
-        }
     });
 }
 
 // this differs from updateTile by calling ST to get the latest data first
 // it then calls the updateTile function to update each subitem in the tile
 function refreshTile(aid, bid, thetype) {
+    var ajaxcall = "doquery";
+    if ( bid.startsWith("h_") ) {
+        ajaxcall = "queryhubitat";
+        bid = bid.substring(2);
+    }
     $.post("housepanel.php", 
-        {useajax: "doquery", id: bid, type: thetype, value: "none", attr: "none"},
+        {useajax: ajaxcall, id: bid, type: thetype, value: "none", attr: "none"},
         function (presult, pstatus) {
             if (pstatus==="success" && presult!==undefined ) {
-                // alert( strObject(presult) );
+//                alert( strObject(presult) );
                 updateTile(aid, presult);
             }
         }, "json"
     );
 }
 
-    // force refresh when we click on a new page tab
+// refresh tiles on this page when switching to it
 function setupTabclick() {
     // $("li.ui-tab > a").click(function() {
     $("a.ui-tabs-anchor").click(function() {
-        var panel = $(this).text().toLowerCase();
-        // alert("panel = "+panel);
-        $("#panel-"+panel+" div.thing").each(function() {
-            var aid = $(this).attr("id").substring(2);
-            var bid = $(this).attr("bid");
-            var thetype = $(this).attr("type");
-            
-            // only do select types for speed
-            if (thetype==="switch" || thetype==="switchlevel" ||
-                thetype==="contact" || thetype==="motion" || 
-                thetype==="clock" || thetype==="lock" || thetype==="mode") {
-                // alert("updating tile aid = "+aid+" type = "+thetype+" on panel="+panel);
-                refreshTile(aid, bid, thetype);
-            }
-            
-        });
+        // save this tab for default next time
+        var defaultTab = $(this).attr("id");
+        if ( defaultTab ) {
+            setCookie( 'defaultTab', defaultTab, 30 );
+        }
+        
+        // disable the refresh feature because it is too slow and not really needed
+//        var panel = $(this).text().toLowerCase();
+//        if ( panel ) {
+//            alert("Updating panel = "+panel);
+//            $("div.panel-"+panel+" div.thing").each(function() {
+//                var aid = $(this).attr("id").substring(2);
+//                var bid = $(this).attr("bid");
+//                var thetype = $(this).attr("type");
+//                refreshTile(aid, bid, thetype);
+//
+//            });
+//        }
     });
 }
 
@@ -425,80 +818,105 @@ function setupTimers() {
     // but only for tabs that are being shown
     $('div.thing').each(function() {
         
-        var tile = $(this).attr("tile");
-        var aid = $(this).attr("id").substring(2);
         var bid = $(this).attr("bid");
-        var thetype = $(this).attr("type");
-        var panel = $(this).attr("panel");
-        var timerval = 0;
+
+        // skip doing this stuff if Hubitat since we directly control status
+        // actually we don't because manual triggers don't always work
+        // instead we just speed it up for hubitat
+//        if ( ! bid.startsWith("h_") ) {
         
-        switch (thetype) {
-            case "switch":
-            case "bulb":
-            case "light":
-            case "switchlevel":
-            case "presence":
-                timerval = 60000;
-                break;
-                
-            case "motion":
-            case "contact":
-                timerval = 60006;
-                break;
+            var tile = $(this).attr("tile");
+            var aid = $(this).attr("id").substring(2);
+            var thetype = $(this).attr("type");
+            var panel = $(this).attr("panel");
 
-            case "thermostat":
-            case "temperature":
-                timerval = 60005;
-                break;
+            // fix bug where panel was not proper case
+            // eventually we'll have to use actual item
+            panel = panel.toLowerCase();
+            var timerval = 0;
 
-            case "music":
-                timerval = 120003;
-                break;
+            switch (thetype) {
+                case "switch":
+                case "bulb":
+                case "light":
+                case "switchlevel":
+                case "presence":
+                    timerval = 30000;
+                    if ( bid.startsWith("h_") ) { timerval = 5000; }
+                    break;
 
-            case "weather":
-                timerval = 300000;
-                break;
+                case "motion":
+                case "contact":
+                    timerval = 30001;
+                    if ( bid.startsWith("h_") ) { timerval = 5001; }
+                    break;
 
-            case "mode":
-            case "routine":
-                timerval = 60002;
-                break;
+                case "thermostat":
+                case "temperature":
+                    timerval = 60002;
+                    break;
 
-            case "lock":
-            case "door":
-            case "valve":
-                timerval = 60001;
-                break;
+                case "music":
+                    timerval = 60003;
+                    break;
 
-            case "image":
-                timerval = 120000;
-                break;
+                case "weather":
+                    timerval = 90004;
+                    break;
 
-            // update clock every minute
-            case "clock":
-                timerval = 60000;
-                break;
-        }
+                case "mode":
+                case "routine":
+                    timerval = 90005;
+                    break;
+
+                case "lock":
+                case "door":
+                case "valve":
+                    timerval = 60006;
+                    if ( bid.startsWith("h_") ) { timerval = 5002; }
+                    break;
+
+                case "image":
+                    timerval = 60007;
+                    break;
+
+                // update clock every minute
+                case "clock":
+                    timerval = 60000;
+                    break;
+            }
+
+            if ( timerval && aid && bid ) {
+
+                // define the timer callback function to update this tile
+                var apparray = [aid, bid, thetype, panel, timerval];
+                apparray.myMethod = function() {
+
+                    // only call and update things if this panel is visible
+                    // or if it is a clock tile
+                    if ( this[2]=="clock" || $('#'+this[3]+'-tab').attr("aria-hidden") === "false" ) {
+                        var that = this;
+    //                    alert("aid= "+that[0]+" bid= "+that[1]+" type= "+that[2]);
+                        refreshTile(that[0], that[1], that[2]);
+                    }
+                    setTimeout(function() {apparray.myMethod();}, this[4]);
+                };
+
+                // wait before doing first one
+                setTimeout(function() {apparray.myMethod();}, timerval);
+//            }
         
-        if ( timerval && aid && bid ) {
-
-            // define the timer callback function to update this tile
-            var apparray = [aid, bid, thetype, panel, timerval];
-            apparray.myMethod = function() {
-                
-                // only call and update things if this panel is visible
-                // or if it is a clock tile
-                if ( this[2]=="clock" || $('#'+this[3]+'-tab').attr("aria-hidden") === "false" ) {
-                    var that = this;
-//                    alert("aid= "+that[0]+" bid= "+that[1]+" type= "+that[2]);
-                    refreshTile(that[0], that[1], that[2]);
-                }
-                setTimeout(function() {apparray.myMethod();}, this[4]);
-            };
-            
-            // wait before doing first one
-            setTimeout(function() {apparray.myMethod();}, timerval);
         }
+    });
+}
+
+function updateMode() {
+    $('div.thing.mode-thing').each(function() {
+        var otheraid = $(this).attr("id").substring(2);
+        var rbid = $(this).attr("bid");
+        setTimeout(function() {
+            refreshTile(otheraid, rbid, "mode");
+        }, 2000);
     });
 }
 
@@ -511,7 +929,9 @@ function updAll(trigger, aid, bid, thetype, pvalue) {
 
     // update trigger tile first
     // alert("aid= "+aid+" bid= "+bid+" type= "+thetype+" pvalue= "+strObject(pvalue));
-    updateTile(aid, pvalue);
+    if ( trigger !== "slider") {
+        updateTile(aid, pvalue);
+    }
     
     // for music tiles, wait few seconds and refresh again to get new info
     if (thetype==="music") {
@@ -543,6 +963,7 @@ function updAll(trigger, aid, bid, thetype, pvalue) {
     // the second call is needed to make screen refreshes work properly
 //    if (thetype==="switch" || thetype==="bulb" || thetype==="light") {
     if (trigger=="switch.on" || trigger=="switch.off") {
+        updateMode();
         $('div.thing[bid="'+bid+'"][type="switch"]').each(function() {
             var otheraid = $(this).attr("id").substring(2);
             if (otheraid !== aid) { updateTile(otheraid, pvalue); }
@@ -574,26 +995,21 @@ function updAll(trigger, aid, bid, thetype, pvalue) {
     }
     
     // if this is a routine action then update the modes immediately
+    // also do this update for piston or momentary refreshes
     // use the same delay technique used for music tiles noted above
     if (thetype==="routine") {
-        $('div.thing.mode-thing').each(function() {
-            var otheraid = $(this).attr("id").substring(2);
-            var rbid = $(this).attr("bid");
-            setTimeout(function() {
-                refreshTile(otheraid, rbid, "mode");
-            }, 2000);
-        });
-        
+        updateMode();
     }
     
     // if this is a switchlevel go through and set all switches
     // change to use refreshTile function so it triggers PHP session update
     // but we have to do this after waiting a few seconds for ST to catch up
     // if (thetype==="switchlevel" || thetype==="bulb" || thetype==="light") {
-    if (trigger==="level-up" || trigger==="level-dn" || 
+    if (trigger==="level-up" || trigger==="level-dn" || trigger==="slider" ||
         trigger==="hue-up" || trigger==="hue-dn" ||
         trigger==="saturation-up" || trigger==="saturation-dn" ||
         trigger==="colorTemperature-up" || trigger==="colorTemperature-dn" ) {
+//        alert("level trigger: bid= "+bid+" pvalue= "+strObject(pvalue));
         $('div.thing[bid="'+bid+'"][type="switch"]').each(function() {
             var otheraid = $(this).attr("id").substring(2);
             updateTile(otheraid, pvalue);
@@ -638,13 +1054,23 @@ function setupPage(trigger) {
         var aid = $(this).attr("aid");
         
         // avoid doing click if the target was the title bar
-        if ( $(this).attr("id") && $(this).attr("id").substring(0,2) == "s-" ) return;
+        // or if not in Operate mode
+        if ( priorOpmode!=="Operate" || 
+             ( $(this).attr("id") && $(this).attr("id").startsWith("s-") ) ) return;
 
         var theclass = $(this).attr("class");
         var subid = $(this).attr("subid");
         var tile = '#t-'+aid;
         var bid = $(tile).attr("bid");
+        var bidupd = bid;
         var thetype = $(tile).attr("type");
+        
+        // set the action differently for Hubitat
+        var ajaxcall = "doaction";
+        if ( bid.startsWith("h_") ) {
+            ajaxcall = "dohubitat";
+            bid = bid.substring(2);
+        }
 
         // get target id and contents
         var targetid = '#a-'+aid+'-'+subid;
@@ -652,7 +1078,7 @@ function setupPage(trigger) {
         
         // for switches and locks set the command to toggle
         // for most things the behavior will be driven by the class value = swattr
-        if (thetype==="switch" || thetype==="lock" || 
+        if (thetype==="switch" || thetype==="lock" || thetype==="door" ||
             thetype==="switchlevel" ||thetype==="bulb" || thetype==="light") {
             thevalue = "toggle";
         } else {
@@ -672,15 +1098,15 @@ function setupPage(trigger) {
                 this[0].html(this[2]);
             };
             $.post("housepanel.php", 
-                {useajax: "doaction", id: bid, type: thetype, value: thevalue, attr: theclass},
+                {useajax: ajaxcall, id: bid, type: thetype, value: thevalue, attr: theclass},
                 function(presult, pstatus) {
                     // alert("pstatus= "+pstatus+" len= "+lenObject(presult)+" presult= "+strObject(presult));
                     if (pstatus==="success" && presult!==undefined && presult!==false) {
                         if (thetype==="piston") {
                             $(that).addClass("firing");
-                            $(that).html("Piston Firing...");
+                            $(that).html("firing");
                         }
-                        else if ( thevalue && thevalue.hasOwnProperty("indexOf") && thevalue.indexOf("on") >= 0 ) {
+                        else if ( $(that).hasClass("on") ) {
                             $(that).removeClass("on");
                             $(that).addClass("off");
                             $(that).html("off");
@@ -690,6 +1116,7 @@ function setupPage(trigger) {
                             $(that).html("on");
                         }
                         setTimeout(function(){classarray.myMethod();}, 1500);
+                        updateMode();
                     }
                 });
 //        } else if (thetype==="switch" || thetype==="lock" || thetype==="switchlevel" ||
@@ -697,13 +1124,13 @@ function setupPage(trigger) {
         // now we invoke action for everything
         // within the groovy code if action isn't relevant then nothing happens
         } else {
-            // alert("id= "+bid+" type= "+thetype+" value= "+thevalue+" class="+theclass);
+//            alert("id= "+bid+" type= "+thetype+" value= "+thevalue+" class="+theclass);
             $.post("housepanel.php", 
-                   {useajax: "doaction", id: bid, type: thetype, value: thevalue, attr: theclass},
+                   {useajax: ajaxcall, id: bid, type: thetype, value: thevalue, attr: theclass},
                    function (presult, pstatus) {
                         if (pstatus==="success" ) {
-                            // alert( strObject(presult) );
-                            updAll(trigger,aid,bid,thetype,presult);
+//                            alert( strObject(presult) );
+                            updAll(trigger,aid,bidupd,thetype,presult);
                         }
                    }, "json"
             );
